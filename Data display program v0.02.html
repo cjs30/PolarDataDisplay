@@ -1,0 +1,213 @@
+<!-- To detect the steps use ZRate 100ms time constant with differential 2 points apart with rate over 1000-->
+<!-- Need to work on UpdateSubPlot so that when mainplot is zoomed only the steps visible are plotted and the list is scrolled to the right point. Also need to display the list of traces selected in sub-plot -->
+<html>
+<head>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>      
+    <meta http-equiv="content-type" content="text/html; charset=utf-8">
+    <link href='https://fonts.googleapis.com/css?family=Roboto' rel='stylesheet'>
+    <style>
+        body {font-family: 'Roboto';font-size: 16px;}
+        table {font-family: 'Roboto';font-size: 16px;width:100%;} 
+        button {font-family: 'Roboto';font-size: 16px;}
+        input[type='number']{font-family: 'Roboto';font-size: 16px;width: 100px;}
+        input[type='text']{font-family: 'Roboto';font-size: 16px;width: 400px;} 
+        input[type='file']{font-family: 'Roboto';font-size: 16px; width: 400px;}
+        input[type="color"] {-webkit-appearance: none;border: none;width: 30px;height: 14px;}
+        input[type="color"]::-webkit-color-swatch-wrapper {padding: 0;}
+        input[type="color"]::-webkit-color-swatch {border: none;}
+        .myDiv {border: 5px outset red;background-color: lightblue;text-align: center;height:150px;overflow:auto;margin-top:20px;}
+        body { margin: 0;}
+* { box-sizing: border-box; }
+
+Table { border-collapse: collapse; margin: 0;   }
+td    { border: 0px solid grey; padding: 1px 5px; }
+thead { background-color: pink;}
+
+    </style>
+    <title>Polar data visualization</title>
+</head>
+<body><H1>Polar data visualization utility</H1>
+<p>Polar Sensor data file: <input id="PSL-input" type="file" name="name" accept=".txt,.csv"></p>
+<table><tr>
+    <td style="width: 90vw;"><div id="div1"></div></td>
+    <td><div id='tracelist'></div></td>
+</tr></table>
+<SCRIPT>
+//set a trigger to showresult once a file is selected
+document.getElementById('PSL-input').addEventListener('change', ExtractFile, false);
+var mainplot=document.getElementById('div1');
+//the function that is triggered once a file is selected
+
+//this function is triggered once the file is loaded
+function ExtractFile(){console.log("Extracting file - when loaded executing showResult()");fr = new FileReader();fr.onload = showResult;fr.readAsBinaryString(document.getElementById('PSL-input').files[0]);}      
+ 
+var data=[], layout=[],TimeArray=[],devicelist=[], offsets=[];
+function median(arr){const mid=Math.floor(arr.length/2);const sortedArr=[...arr].sort((a,b)=>a-b);if(arr.length % 2===0){return (sortedArr[mid-1]+sortedArr[mid])/2;}else{return sortedArr[mid];}}
+function addRate(i,datacols,headings){
+    output={'Time':[],'Data':[]};
+    for(var a=1;a<datacols[i].length;a++){
+        output.Time[a-1]=datacols[i][a];
+        output.Data[a-1]=60/(datacols[i][a]-datacols[i][a-1]);   
+    }
+    middle=median(output.Data);upper=middle*1.2;lower=middle*0.6;
+    filtered={'Name':"bpm "+headings[i+1],"Time":[],"Data":[]};
+    for(var a=0;a<output.Time.length;a++){if(output.Data[a]<upper & output.Data[a]>lower){filtered.Time.push(output.Time[a]);filtered.Data.push(output.Data[a]);}}
+    return filtered;
+}
+
+function dataParse(headings,datacols){
+    channel=[];
+    for(i=0;i<headings.length;i++){
+        if(headings[i]=="Time"){
+            var originallength=datacols[i].length;
+            var arraylength=datacols[i].findLastIndex((element) => element>0);
+            if(arraylength>0){datacols[i].length=datacols[i+1].length=arraylength-2;}
+            //console.log(headings[i+1],"Length was "+originallength+" now "+datacols[i].length);
+            channel.push({"Name":headings[i+1],"Time":datacols[i].map(Number),"Data":datacols[i+1].map(Number)});
+            if(headings[i+1].substring(0,7)=="PPGpeak" || headings[i+1].substring(0,3)=="QRS"){channel.push(addRate(i,datacols,headings));}
+        }
+    }
+    return channel;
+}
+function transpose(matrix) {return matrix[0].map((col, i) => matrix.map(row => row[i]));}
+function die(){throw new Error("Killed!");}
+function getDeviceList(lines){
+    for (i=0;i<lines.length;i++){if(lines[i].substring(0,6)=="Polar "){DeviceLine=lines[i].split(",");break;}}
+    for(i=0;i<DeviceLine.length;i++){
+        val=DeviceLine[i].split(':')[0];
+        if(val.substring(0,6)=="Polar "){
+            devicelist.push(val);
+            currentval=val;
+        }
+        DeviceLine[i]=currentval;
+    }
+    return devicelist;
+}
+function getHeadingsList(lines,devicelist){for (i=0;i<lines.length;i++){if(lines[i].substring(0,5)=="Time,"){headings=lines[i].split(",");j=i;break;}}var a=0;for(i=0;i<headings.length;i++){if(headings[i]==''){a=a+1;}if(headings[i]!=="Time" && headings[i]!==""){headings[i]=headings[i]+devicelist[a].substring(5,);}}return headings;}
+function getDeviceId(name){return name.substr(name.length-7);}
+function showResult()
+{    
+    var lines=fr.result.split(/\r\n/);
+    //console.log("lines",lines);
+    devicelist=getDeviceList(lines);
+    headings=getHeadingsList(lines,devicelist);
+
+    datalines=[];
+    for(i=j+1;i<lines.length;i++){
+        //datalines[i-j-1]=lines[i].split(',');
+        datalines[i-j-1] = lines[i].split(',');
+        //datalines[i-j-1] = lines[i].split(',').map(Number);
+    }
+    //console.log("datalines",datalines);
+    //console.log("transposed",transpose(datalines));
+    arrays=dataParse(headings,transpose(datalines));
+    //console.log("arrays",arrays);
+    TimeArray=TimeArray.map(function(value){return (value-TimeArray[0]);});
+    layout={
+        title: '',
+        xaxis: {title: 'Time (s)', range:[0,TimeArray[TimeArray.length-1]]},
+        yaxis: {title: 'Value (arb)'},
+        margin: {l: 50,r: 5,b: 40,t: 20,pad: 4},
+        showlegend: false
+    };
+    //transfer from arrays to traces with time and data columns and line format
+    var traces=[];
+    for(i=0;i<arrays.length;i++){
+        tracename=arrays[i].Name;
+        r=Math.round(Math.random()*256);g=Math.round(Math.random()*256);b=Math.round(Math.random()*256);
+        colour="rgb("+r+","+g+","+b+")";
+        format={type: 'scatter',  mode: 'lines', line:{color:colour, width: 1}, name:tracename}
+        traces[tracename]=format;
+        traces[tracename].x=arrays[i].Time;
+        traces[tracename].y=arrays[i].Data
+        traces[tracename].color=rgbToHex(r,g,b);
+    }
+    //console.log("traces",traces);
+    
+    //outputinit='Traces to plot [enable zeroing <input type="checkbox" id="zero" onclick="zeroing()">]';
+    var deviceId=''; var output=[];
+    for (const [key, value] of Object.entries(traces)){
+        if(deviceId!=getDeviceId(key)){
+            deviceId=getDeviceId(key);
+            var devicename=key.substring(key.indexOf(' ')+1,);
+            output[devicename]='<tr><thead>'+devicename+'</thead></tr><tr><th><input type="number" width="20" value="0" id="offset_'+deviceId+'" onchange="updateTimebase()" readonly><span id="diff_'+deviceId+'"></span></th></tr>';
+        }
+        output[devicename]+='<tr><td><input id="traces_'+key+'" type="checkbox" name="traces[]" value="'+key+'" onclick="Alterplotted();"><input type="color" width="5" id="color_'+key+'" value="'+traces[key].color+'" oninput="Alterplotted();">'+' '+key.substring(0,key.indexOf(' '))+'</td></tr>';
+        data.push(traces[key]);
+    }
+    //console.log("data",data);
+    var finaloutput='';
+    for(var i in output){finaloutput+="<td valign='top'><table border=1>"+output[i]+"</table></td>";}    
+    document.getElementById('tracelist').innerHTML="<table><tr><td colspan='3'>Traces to plot [enable zeroing <input type='checkbox' id='zero' onclick='zeroing()'>]</td></tr><tr>"+finaloutput+"</tr></table>";
+    Alterplotted()
+
+
+}
+const rgbToHex=(r,g,b)=>{return "#"+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);}
+function hexToRgb(hex) {var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);return result ? "rgb("+parseInt(result[1], 16)+","+parseInt(result[2], 16)+","+parseInt(result[3], 16)+")" : null;}
+function updateTimebase(){
+    var offsetsnum=0;var referencetime=0;
+    for(i=0;i<devicelist.length;i++){
+        id=getDeviceId(devicelist[i]);
+        var value=Number(document.getElementById("offset_"+id).value);
+        if(value>0){
+            offsetsnum+=1;
+            if(value>referencetime){referencetime=value;offsets[id]=value;}
+        }
+    }
+
+    if(offsetsnum==devicelist.length){
+        offsets[0]=referencetime;
+        document.getElementById("zero").checked=false;
+        for(i=0;i<data.length;i++){
+            id=getDeviceId(data[i].name);
+            var offsetbox=document.getElementById("offset_"+id);
+            offsetbox.value='';
+            if(offsets[id]>0){
+                offsetval=offsets[id]-referencetime;
+                document.getElementById("offset_"+id).value=Math.round(offsetval*1000)/1000;
+                for(var j=0;j<data[i].x.length;j++){data[i].x[j]=data[i].x[j]-offsetval;}
+            }
+        }
+    Alterplotted();
+    }
+    
+}
+function zeroing(){
+    //console.log("Zeroing", offsets);
+    for(i=0;i<data.length;i++){
+        id=getDeviceId(data[i].name);
+        if(offsets[id]>0){
+            document.getElementById("offset_"+id).value=0;
+            offsetval=offsets[id]-offsets[0];
+            data[i].x.map(value => value+offsetval);
+        }
+    }
+    //add PPG difference data here
+    Alterplotted();
+}
+function Alterplotted()
+{
+    var checkboxes = document.querySelectorAll('input[type=checkbox]:checked');
+    plotdata=[];
+    for (var i = 0; i < checkboxes.length; i++) {
+        for(var j=0;j<data.length;j++){
+            if(data[j].name==checkboxes[i].value){
+                data[j].line.color=hexToRgb(document.getElementById("color_"+data[j].name).value);
+                plotdata.push(...[data[j]]);
+            }
+        }
+    }
+    //console.log("plotdata",plotdata);
+    Plotly.newPlot('div1', plotdata, layout,{responsive:true});
+    mainplot.on('plotly_click', function(plotdata){
+        if(document.getElementById('zero').checked){
+            var tracename=plotdata.points[0].data.name;
+            var deviceId=getDeviceId(tracename);
+            document.getElementById("offset_"+deviceId).value=plotdata.points[0].x;
+            updateTimebase();
+        }
+    });
+}
+
+</SCRIPT></body></html>
