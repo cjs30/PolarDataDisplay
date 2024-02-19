@@ -1,0 +1,302 @@
+<!-- To detect the steps use ZRate 100ms time constant with differential 2 points apart with rate over 1000-->
+<!-- Need to work on UpdateSubPlot so that when mainplot is zoomed only the steps visible are plotted and the list is scrolled to the right point. Also need to display the list of traces selected in sub-plot -->
+<html>
+<head>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>      
+    <meta http-equiv="content-type" content="text/html; charset=utf-8">
+    <link href='https://fonts.googleapis.com/css?family=Roboto' rel='stylesheet'>
+    <style>
+        body {font-family: 'Roboto';font-size: 16px;}
+        table {font-family: 'Roboto';font-size: 16px;width:100%;} 
+        button {font-family: 'Roboto';font-size: 16px;}
+        input[type='number']{font-family: 'Roboto';font-size: 16px;width: 100px;}
+        input[type='text']{font-family: 'Roboto';font-size: 16px;width: 400px;} 
+        input[type='file']{font-family: 'Roboto';font-size: 16px; width: 400px;}
+        input[type="color"] {-webkit-appearance: none;border: none;width: 30px;height: 14px;}
+        input[type="color"]::-webkit-color-swatch-wrapper {padding: 0;}
+        input[type="color"]::-webkit-color-swatch {border: none;}
+        .myDiv {border: 5px outset red;background-color: lightblue;text-align: center;height:150px;overflow:auto;margin-top:20px;}
+        body { margin: 0;}
+* { box-sizing: border-box; }
+
+Table { border-collapse: collapse; margin: 0;   }
+td    { border: 0px solid grey; padding: 1px 5px; }
+thead { background-color: pink;}
+
+    </style>
+    <title>Polar data visualization</title>
+</head>
+<body><H1>Polar data visualization utility</H1>
+<p>Polar Sensor data file: <input id="PSL-input" type="file" name="name" accept=".txt,.csv"></p>
+<table><tr>
+    <td style="width: 90vw;"><div id="div1"></div></td>
+    <td><div id='tracelist'></div></td>
+    <td><span id='download'></span></td>
+</tr></table>
+<SCRIPT>
+//set a trigger to showresult once a file is selected
+document.getElementById('PSL-input').addEventListener('change', ExtractFile, false);
+var mainplot=document.getElementById('div1');
+//the function that is triggered once a file is selected
+
+//this function is triggered once the file is loaded
+function ExtractFile(){console.log("Extracting file - when loaded executing showResult()");fr = new FileReader();fr.onload = showResult;fr.readAsBinaryString(document.getElementById('PSL-input').files[0]);}      
+ 
+var data=[],devicelist=[];
+var offsets=[];
+var layout={
+    title: '',
+    xaxis: {title: 'Time (s)'},
+    yaxis: {title: 'Value (arb)'},
+    margin: {l: 50,r: 5,b: 40,t: 20,pad: 4},
+    showlegend: false
+};
+function median(arr){const mid=Math.floor(arr.length/2);const sortedArr=[...arr].sort((a,b)=>a-b);if(arr.length % 2===0){return (sortedArr[mid-1]+sortedArr[mid])/2;}else{return sortedArr[mid];}}
+function addTraceList(traces){
+    var deviceId=''; var output=[];
+    for (const [key, value] of Object.entries(traces)){
+        var id=traces[key].name;
+        if(deviceId!=getDeviceId(id)){
+            deviceId=getDeviceId(id);
+            //console.log("key",key);
+            var devicename=traces[key].name.substring(traces[key].name.indexOf(' ')+1,);
+            output[devicename]='<tr><thead>'+devicename+'</thead></tr><tr><th><input type="number" width="20" value="0" id="offset_'+deviceId+'" onchange="updateTimebase()" readonly><span id="diff_'+deviceId+'"></span></th></tr>';
+        }
+        tracename=id.substring(0,id.indexOf(' '))
+        if(tracename=="bpm"){ischecked="checked";}else{ischecked="";}
+        output[devicename]+='<tr><td><input id="traces_'+id+'" type="checkbox" name="traces[]" value="'+id+'" onclick="Alterplotted();" '+ischecked+'><input type="color" width="5" id="color_'+id+'" value="'+traces[key].color+'" oninput="Alterplotted();">'+tracename+'</td></tr>';
+    }
+
+    var finaloutput='';
+    for(var i in output){
+        if(i.substring(0,5)=="Sense"){var recalcbutton='<button onclick="redoPPGpeak(\''+i+'\');">redo PPGpeak</button>';}else{recalcbutton='';}
+        finaloutput+="<td valign='top'>"+recalcbutton+"<table border=1>"+output[i]+"</table></td>";
+    }    
+    document.getElementById('tracelist').innerHTML="<table><tr><td colspan='3'>Traces to plot [enable zeroing <input type='checkbox' id='zero' onclick='zeroing()'>]</td></tr><tr>"+finaloutput+"</tr></table>";
+}
+function redoPPGpeak(device){
+    var QRSindex=data.findIndex(p=>p.name.includes("QRS"));
+    var PPGpeakindex=data.findIndex(p=>p.name.includes("PPGpeak "+device));
+    var PPGrateindex=data.findIndex(p=>p.name.includes("PPGrate "+device));
+    var QRS=data[QRSindex];var PPG=data[PPGrateindex];
+    var peak=data[PPGpeakindex];
+    peak.x=[];peak.y=[];
+    for(var i=0;i<QRS.x.length;i++){
+        var QRStime=QRS.x[i];
+        var PPGtime = PPG.x.reduce(function(prev, curr) {return (Math.abs(curr - QRStime) < Math.abs(prev - QRStime) ? curr : prev);});
+        if(Math.abs(PPGtime-QRStime)<0.5){
+            var PPGIndex=PPG.x.indexOf(PPGtime);
+            var temparray=PPG.y.slice(PPGIndex-15,PPGIndex+15);
+            var PPGmin=Math.min(...temparray);
+            const sum=temparray.reduce((a, b) => a + b, 0);
+            const avg=(sum/temparray.length) || 0;
+            if(PPGmin<-3000 && PPGmin<avg*1.5){
+                var PPGminIndex=PPG.y.slice(PPGIndex-10,PPGIndex+10).indexOf(PPGmin)+PPGIndex-10;
+                peak.x.push(PPG.x[PPGminIndex]);peak.y.push(PPGmin);
+            }
+        }
+    }
+    data.push(addPAT());
+    addTraceList(data);
+    Alterplotted();
+    
+}
+function addPAT(){
+    var PPGindex=data.findIndex(p=>p.name.includes("PPG difference"));
+    if(PPGindex>-1){data.splice(PPGindex,1);}//remove old PPG difference from array
+    var ppgKey="PPGpeak";
+    var cindex = data.findIndex(p => p.name.includes(ppgKey));
+    var dindex = data.findIndex((a,b) => a.name.includes(ppgKey) && b>cindex);
+    
+    output={color: rgbToHex(255,0,0),type: 'scatter',  mode: 'lines', line:{color:'rgb(255,0,0)', width: 1}, x:[],y:[],name:"PPG difference"};
+    var filtered=[];
+    if(data[cindex].x.length<data[dindex].x.length){var a=data[cindex].x; var b=data[dindex].x;}else{var a=data[dindex].x; var b=data[cindex].x;}
+    
+    for(var i in a){       
+        var found = b.reduce(function(prev, curr) {return (Math.abs(curr - a[i]) < Math.abs(prev - a[i]) ? curr : prev);});
+        var PPGdiff=found-a[i];
+        //100ms limit on difference
+        if(found>-1 && Math.abs(PPGdiff)<0.2){output.x.push(a[i]);output.y.push(PPGdiff);}
+    }
+    addTraceList(data);  
+    return output;
+}
+function addRate(i,datacols,headings){
+    var devicename=headings[i+1].substring(headings[i+1].indexOf(' ')+1,);
+    output={'Time':[],'Data':[]};
+    for(var a=1;a<datacols[i].length;a++){
+        output.Time[a-1]=datacols[i][a];
+        output.Data[a-1]=60/(datacols[i][a]-datacols[i][a-1]);   
+    }
+    middle=median(output.Data);upper=middle*1.2;lower=middle*0.6;
+    var filtered={'Name':"bpm "+devicename,"Time":[],"Data":[]};
+    for(var a=0;a<output.Time.length;a++){
+        if(output.Data[a]<upper & output.Data[a]>lower){
+            filtered.Time.push(output.Time[a]);
+            filtered.Data.push(output.Data[a]);
+        }
+    }
+    return filtered;
+}
+
+function dataParse(headings,datacols){
+    var channel=[];
+    for(var i=0;i<headings.length;i++){
+        if(headings[i]=="Time"){
+            var arraylength=datacols[i].findLastIndex((element) => element>0);
+            if(arraylength>0){datacols[i].length=datacols[i+1].length=arraylength-2;}
+            channel.push({"Name":headings[i+1],"Time":datacols[i].map(Number),"Data":datacols[i+1].map(Number)});
+            var headingType=headings[i+1].substring(0,headings[i+1].indexOf(' '));
+            if(headingType=="PPGpeak" || headingType=="QRS"){
+                channel.push(addRate(i,datacols,headings));
+            }
+        }
+    }
+    return channel;
+}
+function transpose(matrix) {return matrix[0].map((col, i) => matrix.map(row => row[i]));}
+function die(){throw new Error("Killed!");}
+function getDeviceList(lines,headingLine){
+    var DeviceLine=lines[headingLine-1].split(",");
+    for(var i=0;i<DeviceLine.length;i++){
+        val=DeviceLine[i].split(':')[0];
+        if(val.substring(0,6)=="Polar "){
+            devicelist.push(val);
+            var currentval=val;
+        }
+        DeviceLine[i]=currentval;
+    }
+    return devicelist;
+}
+function getHeadingsList(lines,devicelist, headingLine){
+    var headings=lines[headingLine].split(",");
+    var a=0;
+    for(var i=0;i<headings.length;i++){
+        if(headings[i]==''){a=a+1;}
+        if(headings[i]!=="Time" && headings[i]!==""){
+            headings[i]=headings[i]+devicelist[a].substring(5,);
+        }
+    }
+    return headings;
+}
+function download(){
+    var a=window.document.createElement("a");
+    var csvdata=new Blob([dataToCSV()]);
+    a.href=window.URL.createObjectURL(csvdata, {type: "text/plain"});
+    a.download=document.getElementById('PSL-input').files[0].name.split(".csv")[0]+" processed.csv";
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+}
+function dataToCSV(){
+    var tracestoplot=document.querySelectorAll('input[type=checkbox]:checked');
+    var checkboxes=[];
+    for(var i = 0; i<tracestoplot.length; ++i) {checkboxes.push(data.findIndex(p=>p.name==tracestoplot[i].value));}
+    var output='';var j=0;
+    for(var k=0;k<checkboxes.length;k++){output+="Time,"+data[checkboxes[k]].name+",";}
+    output+="\r\n";
+    do{
+        var line=false;
+        var newline='';
+        for(var k=0;k<checkboxes.length;k++){
+            if(j<data[checkboxes[k]].x.length){
+                newline+=data[checkboxes[k]].x[j]+","+data[checkboxes[k]].y[j]+",";
+                line=true;
+            }else{newline+=",,";}
+        }
+        output+=newline+"\r\n";
+        j++;
+    } while (line==true);   
+    return output;
+}
+function getDeviceId(name){return name.substr(name.length-7);}
+function showResult()
+{    
+    document.getElementById('download').innerHTML="<button onclick='download()'>Download plotted traces</button>";
+    var lines=fr.result.split(/\r\n/);
+    var headingLine=lines.findIndex(p=>p.includes("Polar"))+1;
+    devicelist=getDeviceList(lines,headingLine);
+    var headings=getHeadingsList(lines,devicelist,headingLine);
+    var datalines=[];
+    for(var i=headingLine+1;i<lines.length;i++){datalines.push(lines[i].split(','));}    
+    var arrays=dataParse(headings,transpose(datalines));
+    var traces=[];
+    for(var i=0;i<arrays.length;i++){
+        tracename=arrays[i].Name;
+        var r=Math.round(Math.random()*256);var g=Math.round(Math.random()*256);var b=Math.round(Math.random()*256);
+        var colour="rgb("+r+","+g+","+b+")";
+        var format={type: 'scatter',  mode: 'lines', line:{color:colour, width: 1}, name:tracename}
+        traces[tracename]=format;
+        traces[tracename].x=arrays[i].Time;
+        traces[tracename].y=arrays[i].Data
+        traces[tracename].color=rgbToHex(r,g,b);
+    }
+    for(var i in traces){data.push(traces[i]);}
+    addTraceList(data); 
+    Alterplotted()  
+}
+const rgbToHex=(r,g,b)=>{return "#"+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);}
+function hexToRgb(hex) {var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);return result ? "rgb("+parseInt(result[1], 16)+","+parseInt(result[2], 16)+","+parseInt(result[3], 16)+")" : null;}
+function updateTimebase(){
+    var offsetsnum=0;var referencetime=0;
+    for(var i=0;i<devicelist.length;i++){
+        var id=getDeviceId(devicelist[i]);
+        var value=Number(document.getElementById("offset_"+id).value);
+        if(value>0){offsetsnum+=1;if(value>referencetime){referencetime=value;offsets[id]=value;}}
+    }
+
+    if(offsetsnum==devicelist.length){
+        offsets[0]=referencetime;
+        document.getElementById("zero").checked=false;
+        for(var i=0;i<data.length;i++){
+            var id=getDeviceId(data[i].name);
+            if(devicelist.findIndex(p=>p.includes(id))>-1){
+              var offsetbox=document.getElementById("offset_"+id);
+              offsetbox.value='';
+              if(offsets[id]>0){
+                  offsetval=offsets[id]-referencetime;
+                  document.getElementById("offset_"+id).value=Math.round(offsetval*1000)/1000;
+                  data[i].x=data[i].x.map(function(value){return (value-offsetval);});
+              }
+            }
+        }
+    data.push(addPAT());
+    addTraceList(data);
+    Alterplotted();
+    }
+    
+}
+
+function zeroing(){
+    for(var i=0;i<data.length;i++){
+        var id=getDeviceId(data[i].name);
+        if(offsets[id]>0){
+            document.getElementById("offset_"+id).value=0;
+            data[i].x=data[i].x.map(function(value){return (value+offsets[id]-offsets[0])});
+        }
+    }
+    Alterplotted();
+}
+
+function Alterplotted()
+{
+    var checkboxes=document.querySelectorAll('input[type=checkbox]:checked');
+    plotdata=[];
+    for (var i=0;i<checkboxes.length;i++) {
+        for(var j=0;j<data.length;j++){
+            if(data[j].name==checkboxes[i].value){
+                data[j].line.color=hexToRgb(document.getElementById("color_"+data[j].name).value);
+                plotdata.push(...[data[j]]);
+            }
+        }
+    }
+    Plotly.newPlot('div1', plotdata, layout,{responsive:true});
+    mainplot.on('plotly_click', function(plotdata){
+        if(document.getElementById('zero').checked){
+            var tracename=plotdata.points[0].data.name;
+            var deviceId=getDeviceId(tracename);
+            document.getElementById("offset_"+deviceId).value=plotdata.points[0].x;
+            updateTimebase();
+        }
+    });
+}
+
+</SCRIPT></body></html>
